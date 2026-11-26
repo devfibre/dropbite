@@ -1,5 +1,7 @@
 name: Dependabot auto-merge
 
+# Inline copy of devfibre/shared-workflows dependabot-automerge.yaml: a public
+# repository cannot call a reusable workflow from a private one.
 # Minor/patch Dependabot PRs get auto-merge enabled; GitHub merges once the
 # required status checks of the org ruleset are green. Majors stay open.
 on:
@@ -9,9 +11,54 @@ permissions:
   contents: read
 
 jobs:
-  automerge:
-    if: github.event.pull_request.user.login == 'dependabot[bot]'
+  merge:
+    # Only Dependabot's own PRs, never a human push onto a Dependabot branch.
+    if: github.event.pull_request.user.login == 'dependabot[bot]' && github.actor == 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
     permissions:
       contents: write
       pull-requests: write
-    uses: devfibre/shared-workflows/.github/workflows/dependabot-automerge.yaml@main
+    steps:
+      - id: meta
+        uses: dependabot/fetch-metadata@v2
+
+      # Allowlist: only minor and patch. Majors and anything without a semver
+      # type (e.g. Docker digests, unknown) stay open for review. For grouped
+      # PRs fetch-metadata reports the largest update in the group.
+      - name: Enable auto-merge
+        if: >-
+          steps.meta.outputs.update-type == 'version-update:semver-minor' ||
+          steps.meta.outputs.update-type == 'version-update:semver-patch'
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GH_TOKEN: ${{ github.token }}
+          METHOD: squash
+          UPDATE_TYPE: ${{ steps.meta.outputs.update-type }}
+        run: |
+          case "$METHOD" in squash|merge|rebase) ;; *)
+            echo "::error::merge-method must be squash, merge or rebase"; exit 1 ;;
+          esac
+          echo "$UPDATE_TYPE: enabling auto-merge ($METHOD)"
+          # --auto: GitHub merges only once the required status checks of the
+          # ruleset are green. Without required checks it merges right away,
+          # which is safe because callers run this job after their checks.
+          if ! gh pr merge --auto "--$METHOD" "$PR_URL" 2> err.txt; then
+            cat err.txt
+            if grep -qi 'auto merge is not allowed\|enablePullRequestAutoMerge' err.txt; then
+              # Repo has "Allow auto-merge" off: fall back to a direct merge,
+              # gated by the caller's needs: on its checks.
+              echo "::warning::Allow auto-merge is off in this repository; merging directly"
+              gh pr merge "--$METHOD" "$PR_URL"
+            else
+              exit 1
+            fi
+          fi
+
+      - name: Skip
+        if: >-
+          steps.meta.outputs.update-type != 'version-update:semver-minor' &&
+          steps.meta.outputs.update-type != 'version-update:semver-patch'
+        env:
+          UPDATE_TYPE: ${{ steps.meta.outputs.update-type }}
+        run: echo "::notice::Not auto-merging '${UPDATE_TYPE:-unknown}', needs manual review"
