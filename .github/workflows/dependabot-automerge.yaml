@@ -1,0 +1,17 @@
+name: Dependabot auto-merge
+
+# Minor/patch Dependabot PRs get auto-merge enabled; GitHub merges once the
+# required status checks of the org ruleset are green. Majors stay open.
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  automerge:
+    if: github.event.pull_request.user.login == 'dependabot[bot]'
+    permissions:
+      contents: write
+      pull-requests: write
+    uses: devfibre/shared-workflows/.github/workflows/dependabot-automerge.yaml@main
